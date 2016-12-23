@@ -13,13 +13,10 @@
  * language called bsh.
  *
  * TODO:
- * - Ruby plugin system, modular system
  * - accept bsh and .bsh files (Shell scripting language)
  * - include basic utilities
- * - run executable files
  * - .sh to .bsh interperter or compiler
- * - live tab completions
- * - command history
+ * - live tab completions <<<
  */
 
 #include "bloop.h"
@@ -32,15 +29,8 @@
  * Default path to look for a .bloop file
  */
 #define BLOOP_DOTBLOOP_FILEPATH "."
-
-/*
- * jauns defaults for missing config files
- * Load defaults if the .jauns file cannot be found or is missing. Include a
- * default for any configurable setting included in the .jauns file. Do not
- * error out if the file cannot be found.
- */
 #define BLOOP_DEFAULT_MOTD "Couldn't load .bloop, check that .bloop is in your filepath"
-#define BLOOP_DEFAULT_PROMPT "$ "
+#define BLOOP_DEFAULT_PROMPT ">>> "
 
 /*
  * Launch the shell, return 0 on a successful exit.
@@ -48,10 +38,8 @@
 int
 main (int argc, char **argv)
 {
-        char **command_history = malloc(sizeof(char*) *
-                                        BLOOP_MAX_HISTORY_DEPTH);
         shell_init();
-        return shell_loop(command_history);
+        return shell_loop();
 }
 
 /*
@@ -62,13 +50,19 @@ main (int argc, char **argv)
  * Live tab completions should be handled here? Right?
  */
 int
-shell_loop (char **history)
+shell_loop (void)
 {
         int status = 1;
+        int return_status = 0;
         char *input = malloc(sizeof(char) * BLOOP_MAX_BUFFER_SIZE);
         char **command = malloc (sizeof(char*) * BLOOP_MAX_INPUT_ARGS);
 
         char *directory = malloc(sizeof(char) * BLOOP_MAX_VARIABLE_NAME);
+
+        char **history = calloc(BLOOP_DEFAULT_HISTORY_DEPTH, sizeof(char *));
+        history[BLOOP_DEFAULT_HISTORY_DEPTH] = NULL;
+
+        int command_index = 0;
 
         while (status) {
 
@@ -76,23 +70,29 @@ shell_loop (char **history)
                 printf("%s ", directory);
 
                 printf(BLOOP_DEFAULT_PROMPT);
+
                 input = fgets(input, BLOOP_MAX_BUFFER_SIZE, stdin);
+
+                add_history(history, input, command_index);
+                command_index++;
+                if (command_index == BLOOP_DEFAULT_HISTORY_DEPTH) {
+                        realloc(history, sizeof(char *) *
+                                (BLOOP_DEFAULT_HISTORY_DEPTH +
+                                 command_index % BLOOP_DEFAULT_HISTORY_DEPTH
+                                 * BLOOP_DEFAULT_HISTORY_DEPTH ));
+                }
+
                 parse_line(command, input);
 
-                if (!built_in(command)) {
-                        /* fork and execute the command */
+                if (!built_in(command, history)) {
                         pid_t child_pid = fork();
-                        /* Check childPID for -1 and errorno */
                         if (child_pid == 0) {
-                                execute_command(command);
+                                if(execute_command(command)) {
+                                        printf("Command failed to execute\n");
+                                        exit(5);
+                                }
                         } else {
-                                int status;
-                                waitpid(child_pid, &status, 0);
-                                //if (is_background_job(command)) {
-                                        // Record in list of background jobs
-                                //} else {
-                                //        wait_pid(childPID);
-                                //}
+                                waitpid(child_pid, &return_status, 0);
                         }
                 }
         }
@@ -152,24 +152,6 @@ parse_line (char **command, char *inputline)
 }
 
 /*
- * Simple test function to echo commands issued at the console, use for testing
- * shell inputs.
- */
-void
-echo_command (char **command)
-{
-        int ii = 0;
-        printf("Command: %s\n", command[ii]);
-        printf("Arguments:\n");
-
-        while (command[++ii][0] != '\0') {
-                printf("%s\n", command[ii]);
-        }
-
-        return;
-}
-
-/*
  * Checks the user's input against the built in commands and returns an integer
  * value accordingly.
  *
@@ -177,7 +159,7 @@ echo_command (char **command)
  * 1 - Command was 'exit', terminate the shell
  */
 int
-built_in (char **command)
+built_in (char **command, char **history)
 {
         if (!strcmp("exit", command[0])) {
                 printf("[Process Complete]\n");
@@ -186,7 +168,12 @@ built_in (char **command)
         }
 
         if (!strcmp("history", command[0])) {
+                print_history(history);
                 return 2;
+        }
+
+        if (!strcmp("help", command[0])) {
+                return 3;
         }
 
         /* Return 0 if the command is not a built in */
@@ -195,7 +182,9 @@ built_in (char **command)
 
 /*
  * Simple wrapper function for the execvp function, given a parsed string as
- * an input.
+ * an input. Any return value means that execvp failed to find the requested
+ * program and didn't execute the command. This should be handled by the
+ * implementation of this function as it is not handled by the function.
  */
 int
 execute_command (char **command)
@@ -210,5 +199,53 @@ void
 set_vars (char *directory)
 {
         getcwd(directory, BLOOP_MAX_VARIABLE_NAME);
+        return;
+}
+
+/*
+ * Add a command to a command history list. Pass a pointer to the tail of the
+ * history list and have the command appended to that list.
+ *
+ * Pretty sure this can be optimized. Maybe use realloc while walking the array
+ * instead of pre walking the array and using malloc to create a buffer before
+ * filling it with values.
+ * Commands are truncated of newlines when stored in history.
+ */
+void
+add_history (char **history, char *command, int index)
+{
+        int ii = 0;
+        while (command[ii++])
+
+        history[index] = malloc(sizeof(char) * ii - 1);
+
+        (history[index])[ii - 2] = '\0';
+
+        ii = 0;
+
+        while (command[ii]) {
+                if (command[ii] == '\n') {
+                        break;
+                } else {
+                        history[index][ii] = command[ii];
+                        ii++;
+                }
+        }
+
+        return;
+}
+
+/*
+ * Print out the command history of the shell session.
+ */
+void
+print_history (char **history)
+{
+        int ii = 0;
+        while (history[ii]) {
+                printf("%i: %s\n", ii, history[ii]);
+                ii++;
+        }
+
         return;
 }
