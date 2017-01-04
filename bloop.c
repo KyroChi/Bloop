@@ -9,9 +9,6 @@
  * assignment page from the cornell computer science department:
  * https://www.cs.cornell.edu/Courses/cs414/2004su/homework/shell/shell.html
  *
- * Bloop supports user plugins written in ruby, and has its own rich scripting
- * language called bsh.
- *
  * TODO:
  * - accept bsh and .bsh files (Shell scripting language)
  * - include basic utilities
@@ -20,10 +17,11 @@
  */
 
 #include "bloop.h"
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <termios.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
 
 /*
  * Default path to look for a .bloop file
@@ -33,10 +31,10 @@
 #define BLOOP_DEFAULT_PROMPT ">>> "
 
 /*
- * Launch the shell, return 0 on a successful exit.
+ * GCC entry point, initializes shell variables and starts the shell looping.
  */
 int
-main (int argc, char **argv)
+main ()//int argc, char **argv)
 {
         shell_init();
         return shell_loop();
@@ -53,16 +51,19 @@ int
 shell_loop (void)
 {
         int status = 1;
-        int return_status = 0;
-        char *input = malloc(sizeof(char) * BLOOP_MAX_BUFFER_SIZE);
-        char **command = malloc (sizeof(char*) * BLOOP_MAX_INPUT_ARGS);
 
+        int return_status = 0;
+        int command_index = 0;
+
+        char *input = malloc(sizeof(char) * BLOOP_MAX_BUFFER_SIZE);
+        char **command = malloc(sizeof(char) * BLOOP_MAX_ARG_LENGTH);
         char *directory = malloc(sizeof(char) * BLOOP_MAX_VARIABLE_NAME);
 
-        char **history = calloc(BLOOP_DEFAULT_HISTORY_DEPTH, sizeof(char *));
-        history[BLOOP_DEFAULT_HISTORY_DEPTH] = NULL;
+        if (!input || !directory || !command) {
+                _bloop_error("Shell failed to allocate memory EXIT(10)", 10);
+        }
 
-        int command_index = 0;
+        input[0] = '\0';
 
         while (status) {
 
@@ -70,31 +71,31 @@ shell_loop (void)
                 printf("%s ", directory);
 
                 printf(BLOOP_DEFAULT_PROMPT);
+                bloop_input(input, BLOOP_MAX_BUFFER_SIZE);
 
-                input = fgets(input, BLOOP_MAX_BUFFER_SIZE, stdin);
-
-                add_history(history, input, command_index);
-                command_index++;
-                if (command_index == BLOOP_DEFAULT_HISTORY_DEPTH) {
-                        realloc(history, sizeof(char *) *
-                                (BLOOP_DEFAULT_HISTORY_DEPTH +
-                                 command_index % BLOOP_DEFAULT_HISTORY_DEPTH
-                                 * BLOOP_DEFAULT_HISTORY_DEPTH ));
+                history_t *new_hist_command;
+                if (!(new_hist_command = malloc(sizeof(history_t)))) {
+                        _bloop_error("HISTORY: failed to allocate more memory " \
+                                     "for added depth EXIT(10)", 10);
                 }
+
+                add_history(input, new_hist_command);
+                command_index++;
 
                 parse_line(command, input);
 
-                if (!built_in(command, history)) {
+                if (!built_in(command)) {
                         pid_t child_pid = fork();
                         if (child_pid == 0) {
                                 if(execute_command(command)) {
-                                        printf("Command failed to execute\n");
+                                        printf("Command %s failed to execute\n", command[0]);
                                         exit(5);
                                 }
                         } else {
                                 waitpid(child_pid, &return_status, 0);
                         }
                 }
+
         }
 
         return status;
@@ -112,6 +113,18 @@ shell_init (void)
         // Open .bloop files, revert to defaults if no file is found
         // If file is found, read the config and adjust the shell appropriatly
         printf("Welcome to the bloop shell\n");
+
+        /* Initialize global command history */
+        if (!(HISTORY = malloc(sizeof(history_t)))) {
+                _bloop_error("HISTORY: malloc failure EXIT(10)", 10);
+        }
+
+        HISTORY->command = "\0";
+        HISTORY->next = HISTORY->prev = NULL;
+
+        HISTORY_HEAD = HISTORY;
+
+        return;
 }
 
 /*
@@ -157,10 +170,20 @@ parse_line (char **command, char *inputline)
  *
  * 0 - Command was not a built in
  * 1 - Command was 'exit', terminate the shell
+ * 2 - Commnad was 'history', print out the command history
+ * 3 - Command was 'help', print out the shell help menu
+ * 4 - cd
+ * 5 - kill
+ * 6 - jobs
+ * search for pipe, equals, exclamation
  */
 int
-built_in (char **command, char **history)
+built_in (char **command)
 {
+        if (!command[0]) {
+                return -1;
+        }
+
         if (!strcmp("exit", command[0])) {
                 printf("[Process Complete]\n");
                 exit(0);
@@ -168,7 +191,7 @@ built_in (char **command, char **history)
         }
 
         if (!strcmp("history", command[0])) {
-                print_history(history);
+                print_history();
                 return 2;
         }
 
@@ -181,7 +204,7 @@ built_in (char **command, char **history)
 }
 
 /*
- * Simple wrapper function for the execvp function, given a parsed string as
+ * Simple wrapper function for the execvp function, given a parsed command as
  * an input. Any return value means that execvp failed to find the requested
  * program and didn't execute the command. This should be handled by the
  * implementation of this function as it is not handled by the function.
@@ -193,7 +216,7 @@ execute_command (char **command)
 }
 
 /*
- *
+ * Undefined behaviors:
  */
 void
 set_vars (char *directory)
@@ -210,16 +233,24 @@ set_vars (char *directory)
  * instead of pre walking the array and using malloc to create a buffer before
  * filling it with values.
  * Commands are truncated of newlines when stored in history.
+ * Undefined behaviors:
  */
 void
-add_history (char **history, char *command, int index)
+add_history (char *command, history_t *ptr)
 {
         int ii = 0;
-        while (command[ii++])
 
-        history[index] = malloc(sizeof(char) * ii - 1);
+        ptr->prev = HISTORY_HEAD;
+        HISTORY_HEAD->next = ptr;
+        ptr->next = NULL;
 
-        (history[index])[ii - 2] = '\0';
+        HISTORY_HEAD = ptr;
+
+        while (command[ii++]);
+
+        ptr->command = malloc(sizeof(char) * ii - 1);
+
+        (ptr->command)[ii - 2] = '\0';
 
         ii = 0;
 
@@ -227,7 +258,7 @@ add_history (char **history, char *command, int index)
                 if (command[ii] == '\n') {
                         break;
                 } else {
-                        history[index][ii] = command[ii];
+                        (ptr->command)[ii] = command[ii];
                         ii++;
                 }
         }
@@ -237,15 +268,77 @@ add_history (char **history, char *command, int index)
 
 /*
  * Print out the command history of the shell session.
+ * Undefined behaviors:
  */
 void
-print_history (char **history)
+print_history ()
 {
-        int ii = 0;
-        while (history[ii]) {
-                printf("%i: %s\n", ii, history[ii]);
+        int ii = 1;
+        history_t *ptr = HISTORY;
+
+        while (ptr->next) {
+                printf("%i: %s\n", ii, (ptr->next)->command);
+                ptr = ptr->next;
                 ii++;
         }
 
         return;
+}
+
+/*
+ * Handles input into the bloop shell, hook into tab completion.
+ */
+void
+bloop_input (char *input_buffer, int max_size)
+{
+        int ii = 0;
+        char entered;
+
+        while (1) {
+                if (ii == max_size - 1)
+                        break;
+
+                if (key_press) {
+                        entered = fgetc(stdin);
+
+                        switch (entered) {
+                        case '\n':
+                                input_buffer[ii++] = entered;
+                                input_buffer[ii] = '\0';
+                                return;
+                        case '\t':
+                                /* Tab completion goes here */
+                                break;
+
+                        }
+
+                        input_buffer[ii++] = entered;
+                }
+
+        }
+
+        return;
+}
+
+/*
+ * Return number of buffered keys in stdin
+ * can be used to check if anything is buffered in stdin.
+ */
+int
+key_press (void)
+{
+        static int STDIN, init, bytes;
+        STDIN = init = bytes = 0;
+        struct termios term;
+
+        if (!init) {
+                tcgetattr(STDIN, &term);
+                term.c_lflag &= ~ICANON;
+                tcsetattr(STDIN, TCSANOW, &term);
+                setbuf(stdin, NULL);
+                init = 1;
+        }
+
+        ioctl(STDIN, FIONREAD, &bytes);
+        return bytes;
 }

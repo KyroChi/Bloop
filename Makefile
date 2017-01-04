@@ -1,6 +1,6 @@
 CC = cc
 
-FLAGS = -Wall -Werror -pedantic
+FLAGS = -Wall -Werror -Wextra -pedantic
 DEBUG = -g
 
 OBJECTS = bloop.c
@@ -11,4 +11,4 @@ main: $(OBJECTS)
 	$(CC) $(OBJECTS) -o bloop $(FLAGS)
 
 debug: $(OBJECTS)
-	$(CC) $(OBJECTS) $(DEBUG) -o bloop
+	$(CC) $(OBJECTS) $(DEBUG) -D DEBUG -o bloop
