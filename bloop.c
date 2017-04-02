@@ -18,6 +18,8 @@
 
 #include "bloop.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <termios.h>
 #include <sys/select.h>
@@ -60,7 +62,7 @@ shell_loop (void)
         char *directory = malloc(sizeof(char) * BLOOP_MAX_VARIABLE_NAME);
 
         if (!input || !directory || !command) {
-                _bloop_error("Shell failed to allocate memory EXIT(10)", 10);
+                bloop_error("Shell failed to allocate memory EXIT(10)", 10);
         }
 
         input[0] = '\0';
@@ -75,8 +77,8 @@ shell_loop (void)
 
                 history_t *new_hist_command;
                 if (!(new_hist_command = malloc(sizeof(history_t)))) {
-                        _bloop_error("HISTORY: failed to allocate more memory " \
-                                     "for added depth EXIT(10)", 10);
+                        bloop_error("HISTORY: failed to allocate more memory " \
+                                "for added depth EXIT(10)", 10);
                 }
 
                 add_history(input, new_hist_command);
@@ -115,14 +117,14 @@ shell_init (void)
         printf("Welcome to the bloop shell\n");
 
         /* Initialize global command history */
-        if (!(HISTORY = malloc(sizeof(history_t)))) {
-                _bloop_error("HISTORY: malloc failure EXIT(10)", 10);
+        if (!(g_history = malloc(sizeof(history_t)))) {
+                bloop_error("HISTORY: malloc failure EXIT(10)", 10);
         }
 
-        HISTORY->command = "\0";
-        HISTORY->next = HISTORY->prev = NULL;
+        g_history->command = "\0";
+        g_history->next = g_history->prev = NULL;
 
-        HISTORY_HEAD = HISTORY;
+        g_history_head = g_history;
 
         return;
 }
@@ -226,66 +228,6 @@ set_vars (char *directory)
 }
 
 /*
- * Add a command to a command history list. Pass a pointer to the tail of the
- * history list and have the command appended to that list.
- *
- * Pretty sure this can be optimized. Maybe use realloc while walking the array
- * instead of pre walking the array and using malloc to create a buffer before
- * filling it with values.
- * Commands are truncated of newlines when stored in history.
- * Undefined behaviors:
- */
-void
-add_history (char *command, history_t *ptr)
-{
-        int ii = 0;
-
-        ptr->prev = HISTORY_HEAD;
-        HISTORY_HEAD->next = ptr;
-        ptr->next = NULL;
-
-        HISTORY_HEAD = ptr;
-
-        while (command[ii++]);
-
-        ptr->command = malloc(sizeof(char) * ii - 1);
-
-        (ptr->command)[ii - 2] = '\0';
-
-        ii = 0;
-
-        while (command[ii]) {
-                if (command[ii] == '\n') {
-                        break;
-                } else {
-                        (ptr->command)[ii] = command[ii];
-                        ii++;
-                }
-        }
-
-        return;
-}
-
-/*
- * Print out the command history of the shell session.
- * Undefined behaviors:
- */
-void
-print_history ()
-{
-        int ii = 1;
-        history_t *ptr = HISTORY;
-
-        while (ptr->next) {
-                printf("%i: %s\n", ii, (ptr->next)->command);
-                ptr = ptr->next;
-                ii++;
-        }
-
-        return;
-}
-
-/*
  * Handles input into the bloop shell, hook into tab completion.
  */
 void
@@ -341,4 +283,15 @@ key_press (void)
 
         ioctl(STDIN, FIONREAD, &bytes);
         return bytes;
+}
+
+/*
+ * Error handling for shell errors.
+ */
+void
+bloop_error (char *message, int exit_code) {
+        fflush(stdout);
+        fprintf(stderr, "%s\n", message);
+        fflush(stderr);
+        exit(exit_code);
 }
